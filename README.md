@@ -32,7 +32,7 @@ A professional, browser-based inspection tool for **HDF5 (.h5)** files. This uti
 
 ---
 
-## 🛠 Maintainer Manual
+## Maintainer Manual
 
 ### Architecture
 The application is a "Single File Application" (SFA) using vanilla JavaScript (ESM) and modern CSS frameworks.
