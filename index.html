@@ -1,0 +1,1496 @@
+<!DOCTYPE html>
+<html lang="en"> <!-- Removed default class="light" to allow system detection -->
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HDF5 Data Viewer (uPlot)</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            gray: {
+              750: '#2d3748',
+              850: '#1a202c',
+              950: '#0d1117',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  
+  <!-- uPlot CSS & JS -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.iife.min.js"></script>
+
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    
+    /* Custom Scrollbar for dark mode aesthetics */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    .dark ::-webkit-scrollbar-thumb { background: #4b5563; }
+    .dark ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+
+    .drag-area { border: 2px dashed #cbd5e1; transition: all 0.3s; }
+    .drag-area.active { border-color: #3b82f6; background-color: #eff6ff; }
+    .dark .drag-area { border-color: #4b5563; }
+    .dark .drag-area.active { border-color: #60a5fa; background-color: rgba(59, 130, 246, 0.1); }
+
+    .nested { display: none; padding-left: 20px; border-left: 1px solid #e2e8f0; }
+    .dark .nested { border-color: #374151; }
+    .nested.active { display: block; }
+
+    .caret { cursor: pointer; user-select: none; display: inline-block; width: 15px; }
+    .caret::before { content: "\25B6"; color: #64748b; font-size: 0.8em; display: inline-block; margin-right: 6px; }
+    .caret-down::before { transform: rotate(90deg); }
+    
+    /* Highlight selected tree item */
+    .tree-item-selected { background-color: #dbeafe !important; border-radius: 0.25rem; }
+    .dark .tree-item-selected { background-color: #1e3a8a !important; }
+
+    /* uPlot specific overrides */
+    .uplot { font-family: 'Inter', sans-serif !important; }
+    
+    /* Floating Legend */
+    .u-legend {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        background: rgba(255, 255, 255, 0.9);
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        z-index: 10;
+        font-size: 11px !important;
+        pointer-events: none; /* Let clicks pass through */
+    }
+    .dark .u-legend {
+        background: rgba(31, 41, 55, 0.9);
+        border-color: #4b5563;
+        color: #e5e7eb;
+    }
+    .u-legend tr { margin-bottom: 2px; }
+
+    /* Temporary Input for Axis Editing */
+    .axis-input {
+        position: absolute;
+        z-index: 100;
+        font-size: 12px;
+        padding: 2px 4px;
+        border: 1px solid #3b82f6;
+        border-radius: 4px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        outline: none;
+        width: 100px;
+    }
+    .dark .axis-input {
+        background: #1f2937;
+        color: white;
+        border-color: #60a5fa;
+    }
+
+    /* Table Styles */
+    .data-table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+    .data-table th { position: sticky; top: 0; background: #f9fafb; z-index: 10; font-weight: 600; text-align: left; padding: 0.5rem; border-bottom: 2px solid #e5e7eb; }
+    .data-table td { padding: 0.5rem; border-bottom: 1px solid #e5e7eb; color: #374151; font-family: monospace; white-space: pre-wrap; word-break: break-all; }
+    .data-table tr:hover { background-color: #f3f4f6; }
+    
+    .dark .data-table th { background: #374151; border-bottom-color: #4b5563; color: #e5e7eb; }
+    .dark .data-table td { border-bottom-color: #4b5563; color: #d1d5db; }
+    .dark .data-table tr:hover { background-color: #4b5563; }
+
+    /* Spinner */
+    .loader {
+      border: 4px solid #f3f3f3; border-top: 4px solid #3b82f6; border-radius: 50%;
+      width: 24px; height: 24px; animation: spin 1s linear infinite; display: inline-block; vertical-align: middle;
+    }
+    .dark .loader { border-color: #4b5563; border-top-color: #60a5fa; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+  </style>
+</head>
+
+<body class="h-screen flex flex-col relative bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-200 transition-colors duration-200">
+
+  <!-- Toast Notification -->
+  <div id="toast" class="fixed bottom-4 right-4 bg-gray-800 dark:bg-gray-700 text-white px-4 py-3 rounded-lg shadow-lg transform translate-y-full opacity-0 transition-all duration-300 z-50 flex items-center gap-3">
+    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+    <span id="toast-message">Notification</span>
+  </div>
+
+  <!-- Data Inspection Modal -->
+  <div id="data-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-5xl h-[90vh] flex flex-col overflow-hidden border border-gray-200 dark:border-gray-700">
+      <!-- Header -->
+      <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
+        <div>
+           <h3 id="modal-title" class="font-bold text-gray-800 dark:text-white text-lg">Data Inspection</h3>
+           <div id="modal-meta" class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-1"></div>
+        </div>
+        <button onclick="document.getElementById('data-modal').classList.add('hidden')" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Scrollable Content -->
+      <div class="flex-1 overflow-y-auto p-4 space-y-4">
+        
+        <!-- Section 1: Raw Data Preview -->
+        <div class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded p-4">
+            <h4 class="text-sm font-bold text-blue-800 dark:text-blue-300 mb-2">Raw Data (First Row JSON)</h4>
+            <pre id="modal-raw-json" class="bg-white dark:bg-gray-900 p-3 rounded border border-blue-100 dark:border-blue-900/50 text-xs font-mono overflow-x-auto text-gray-700 dark:text-gray-300 whitespace-pre-wrap">Loading...</pre>
+        </div>
+
+        <!-- Section 2: Parsed Table -->
+        <div>
+            <h4 class="text-sm font-bold text-gray-800 dark:text-gray-200 mb-2">Parsed Table (Preview 1000 rows)</h4>
+            <div class="border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
+                <table class="data-table">
+                <thead>
+                    <tr id="modal-table-head">
+                      <!-- Dynamic Headers will be injected here -->
+                      <th class="w-24">Index</th>
+                      <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody id="modal-body">
+                    <!-- Rows injected here -->
+                </tbody>
+                </table>
+            </div>
+        </div>
+      </div>
+      
+      <!-- Footer -->
+      <div class="p-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-750 text-xs text-gray-500 flex justify-end">
+        <button onclick="document.getElementById('data-modal').classList.add('hidden')" class="bg-blue-600 text-white px-4 py-1 rounded hover:bg-blue-700">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Error Banner -->
+  <div id="lib-error" class="hidden bg-red-100 border-b border-red-400 text-red-700 px-4 py-3 text-sm text-center">
+    <strong class="font-bold">Error:</strong>
+    The HDF5 library failed to initialize. Ensure you are serving this page over HTTP (not file://) and the WASM can load.
+  </div>
+
+  <!-- Header -->
+  <header class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-3 flex justify-between items-center shadow-sm z-10 relative h-16">
+    <!-- Left: Logo/Title -->
+    <div class="flex items-center gap-3 w-1/3">
+      <div class="bg-blue-600 text-white p-2 rounded-lg shadow-sm">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+        </svg>
+      </div>
+      <h1 class="text-lg font-bold text-gray-800 dark:text-white tracking-tight">HDF5 Viewer</h1>
+    </div>
+
+    <!-- Center: Filename -->
+    <div class="absolute left-1/2 transform -translate-x-1/2 text-center">
+         <div class="text-sm font-medium text-gray-700 dark:text-gray-200 truncate max-w-[300px]" id="file-info">No file loaded</div>
+    </div>
+
+    <!-- Right: Theme Toggle -->
+    <div class="w-1/3 flex justify-end">
+        <button id="theme-toggle" class="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors" title="Toggle Dark Mode">
+            <!-- Sun Icon -->
+            <svg id="icon-sun" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+            </svg>
+            <!-- Moon Icon -->
+            <svg id="icon-moon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+            </svg>
+        </button>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 flex overflow-hidden">
+
+    <!-- Sidebar -->
+    <aside id="sidebar-container" class="w-80 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col z-0">
+
+      <!-- File Open Section -->
+      <div class="p-4 border-b border-gray-100 dark:border-gray-700 shrink-0">
+        <div id="drop-zone" class="drag-area w-full rounded-xl p-6 text-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-750">
+          <input type="file" id="file-input" class="hidden" accept=".h5,.hdf5,.he5" />
+          <div class="text-blue-500 dark:text-blue-400 mb-2">
+            <!-- Folder Open Icon -->
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
+                d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" />
+            </svg>
+          </div>
+          <p class="text-sm text-gray-600 dark:text-gray-300 font-medium">Click to Open .h5</p>
+          <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">or drag and drop</p>
+        </div>
+      </div>
+
+      <!-- Dataset List (Structure) -->
+      <div id="tree-panel" class="flex-1 overflow-y-auto p-4 min-h-0">
+        <h3 class="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-3">File Structure</h3>
+        <div id="loading-indicator" class="hidden text-center py-4 text-gray-500 dark:text-gray-400 text-sm">
+          <div class="loader mr-2"></div> Parsing file...
+        </div>
+        <div id="structure-tree" class="text-sm text-gray-700 dark:text-gray-300 font-mono">
+          <p class="text-gray-400 italic text-xs">Load a file to view structure</p>
+        </div>
+      </div>
+
+      <!-- Resizer Handle -->
+      <div id="sidebar-resizer" class="h-1.5 bg-gray-200 dark:bg-gray-700 cursor-row-resize hover:bg-blue-400 dark:hover:bg-blue-500 transition-colors shrink-0 z-10 w-full relative group flex justify-center items-center">
+         <!-- Grip hint -->
+         <div class="w-8 h-1 bg-gray-300 dark:bg-gray-600 rounded-full group-hover:bg-white/50"></div>
+      </div>
+
+      <!-- Properties (Attributes) -->
+      <div id="properties-panel" class="overflow-y-auto p-4 bg-gray-50 dark:bg-gray-750 shrink-0" style="height: 33%;">
+        <h3 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Properties
+        </h3>
+        <table class="w-full text-xs text-left border-collapse bg-white dark:bg-gray-800 rounded shadow-sm">
+          <thead>
+            <tr>
+              <th class="border-b border-gray-200 dark:border-gray-700 p-2 font-semibold text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-750 w-1/3">Name</th>
+              <th class="border-b border-gray-200 dark:border-gray-700 p-2 font-semibold text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-750">Value</th>
+            </tr>
+          </thead>
+          <tbody id="metadata-body">
+             <tr><td colspan="2" class="p-2 text-center text-gray-400 italic dark:text-gray-500">Select an item in the tree to view properties</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </aside>
+
+    <!-- Graph Area -->
+    <section class="flex-1 bg-gray-50 dark:bg-gray-900 flex flex-col relative p-4 transition-colors">
+      <div id="graph-container" class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 flex-1 relative overflow-hidden flex items-center justify-center transition-colors">
+        
+        <!-- uPlot will be injected here -->
+        <div id="empty-state" class="absolute inset-0 flex flex-col items-center justify-center text-gray-400 dark:text-gray-600 pointer-events-none">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mb-4 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+          </svg>
+          <p>Select datasets from the sidebar to visualize</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script type="module">
+    import h5wasm from "https://cdn.jsdelivr.net/npm/h5wasm@0.8.11/dist/esm/hdf5_hl.js";
+
+    // Global state
+    let currentFile = null;
+    let h5File = null;
+    let selectedDatasets = new Set(); 
+    let plotDataCache = {}; 
+    let uplotInstance = null;
+    let resizeObserver = null;
+    let currentlySelectedLabel = null; // Track highlighted UI element
+    
+    // Axis State
+    let axisState = {
+        x: { auto: true, min: null, max: null },
+        y: { auto: true, min: null, max: null }
+    };
+    
+    // Theme State - Initialize from System Preference
+    let isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+    // Constants
+    const LABVIEW_EPOCH_OFFSET = 2082844800;
+    const COLORS = ["#3b82f6", "#ef4444", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#6366f1", "#14b8a6", "#f97316", "#84cc16"];
+
+    // Library handles
+    let FS = null;
+    const { File: H5File, Group, Dataset } = h5wasm;
+
+    // Initialize Library
+    try {
+      const Module = await h5wasm.ready;
+      FS = Module.FS;
+      console.log("h5wasm ready");
+    } catch (e) {
+      console.error("h5wasm failed to load", e);
+      document.getElementById('lib-error').classList.remove('hidden');
+    }
+
+    // --- DOM Elements ---
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const fileInfo = document.getElementById('file-info');
+    const treeContainer = document.getElementById('structure-tree');
+    const graphContainer = document.getElementById('graph-container');
+    const emptyState = document.getElementById('empty-state');
+    const loader = document.getElementById('loading-indicator');
+    
+    // Theme Elements
+    const themeToggle = document.getElementById('theme-toggle');
+    const iconSun = document.getElementById('icon-sun');
+    const iconMoon = document.getElementById('icon-moon');
+
+    // Apply Initial Theme State
+    if (isDarkMode) {
+        document.documentElement.classList.add('dark');
+        iconMoon.classList.add('hidden');
+        iconSun.classList.remove('hidden');
+    }
+    
+    // Sidebar Resizer Elements
+    const sidebar = document.getElementById('sidebar-container');
+    const resizer = document.getElementById('sidebar-resizer');
+    const propertiesPanel = document.getElementById('properties-panel');
+    const treePanel = document.getElementById('tree-panel');
+
+    // Metadata Table Elements
+    const metadataBody = document.getElementById('metadata-body');
+
+    // Modal Elements
+    const modal = document.getElementById('data-modal');
+    const modalTitle = document.getElementById('modal-title');
+    const modalMeta = document.getElementById('modal-meta');
+    const modalRawJson = document.getElementById('modal-raw-json');
+    const modalBody = document.getElementById('modal-body');
+    const modalTableHead = document.getElementById('modal-table-head');
+
+    // Toast Elements
+    const toast = document.getElementById('toast');
+    const toastMsg = document.getElementById('toast-message');
+    let toastTimeout;
+
+    function showToast(msg) {
+        toastMsg.textContent = msg;
+        toast.classList.remove('translate-y-full', 'opacity-0');
+        
+        clearTimeout(toastTimeout);
+        toastTimeout = setTimeout(() => {
+            toast.classList.add('translate-y-full', 'opacity-0');
+        }, 3000);
+    }
+
+    // --- Sidebar Resize Logic ---
+    let isResizing = false;
+
+    resizer.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        document.body.style.cursor = 'row-resize';
+        e.preventDefault(); 
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+        
+        // Calculate new height for properties panel
+        // It's at the bottom, so height = sidebar bottom - mouse Y
+        const sidebarRect = sidebar.getBoundingClientRect();
+        const newHeight = sidebarRect.bottom - e.clientY;
+        
+        // Constraints
+        const maxH = sidebarRect.height - 150; // Leave space for tree
+        const minH = 40; // Min header space
+        
+        if (newHeight > minH && newHeight < maxH) {
+            propertiesPanel.style.height = `${newHeight}px`;
+        }
+    });
+
+    document.addEventListener('mouseup', () => {
+        if(isResizing) {
+            isResizing = false;
+            document.body.style.cursor = '';
+        }
+    });
+
+    // --- Theme Logic ---
+    function toggleTheme() {
+        isDarkMode = !isDarkMode;
+        document.documentElement.classList.toggle('dark', isDarkMode);
+        
+        if (isDarkMode) {
+            iconMoon.classList.add('hidden');
+            iconSun.classList.remove('hidden');
+        } else {
+            iconMoon.classList.remove('hidden');
+            iconSun.classList.add('hidden');
+        }
+        
+        // Rebuild graph to apply new colors if data exists
+        if (selectedDatasets.size > 0) rebuildGraph();
+    }
+    themeToggle.addEventListener('click', toggleTheme);
+
+    // --- Event Listeners ---
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('active'); });
+    dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('active'); });
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('active');
+      if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length) handleFile(e.target.files[0]);
+    });
+
+    resizeObserver = new ResizeObserver(entries => {
+      if (!uplotInstance || !entries[0]) return;
+      const { width, height } = entries[0].contentRect;
+      if (width > 0 && height > 0) {
+        requestAnimationFrame(() => {
+            if (uplotInstance) uplotInstance.setSize({ width, height });
+        });
+      }
+    });
+    resizeObserver.observe(graphContainer);
+
+    // --- Interactive Axis Logic (Right Click / DblClick) ---
+    function initAxisInteractions(u) {
+        const over = u.over;
+
+        // RIGHT CLICK (Context Menu) - AutoScale
+        over.addEventListener('contextmenu', e => {
+            e.preventDefault();
+            const rect = over.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            const leftGutter = u.bbox.left;
+            const bottomGutterTop = u.bbox.top + u.bbox.height;
+            
+            // If in Left Gutter (Y Axis)
+            if (x < leftGutter) {
+                axisState.y.auto = true;
+                rebuildGraph(); // Simplest way to apply new scale opts
+            }
+            // If in Bottom Gutter (X Axis)
+            else if (y > bottomGutterTop) {
+                axisState.x.auto = true;
+                rebuildGraph();
+            }
+        });
+
+        // MOUSE MOVE - Cursor Hint
+        over.addEventListener('mousemove', e => {
+             const rect = over.getBoundingClientRect();
+             const x = e.clientX - rect.left;
+             const y = e.clientY - rect.top;
+             const leftGutter = u.bbox.left;
+             const bottomGutterTop = u.bbox.top + u.bbox.height;
+             
+             if (x < leftGutter || y > bottomGutterTop) {
+                 over.style.cursor = 'text'; // Hint editing
+             } else {
+                 over.style.cursor = 'crosshair';
+             }
+        });
+
+        // DOUBLE CLICK - Edit Axis Limits
+        over.addEventListener('dblclick', e => {
+            const rect = over.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            const leftGutter = u.bbox.left;
+            const bottomGutterTop = u.bbox.top + u.bbox.height;
+            const chartHeight = u.bbox.height;
+            const chartWidth = u.bbox.width;
+
+            let axis = null;
+            let type = null; // 'min' or 'max'
+            let initialVal = null;
+            let isTime = false;
+
+            // Y Axis Hit Test
+            if (x < leftGutter) {
+                axis = 'y';
+                // Top half is Max, Bottom half is Min
+                if (y < u.bbox.top + chartHeight / 2) {
+                    type = 'max';
+                    initialVal = u.scales.y.max;
+                } else {
+                    type = 'min';
+                    initialVal = u.scales.y.min;
+                }
+            } 
+            // X Axis Hit Test
+            else if (y > bottomGutterTop) {
+                axis = 'x';
+                isTime = u.scales.x.time;
+                // Left half is Min, Right half is Max
+                if (x < leftGutter + chartWidth / 2) {
+                    type = 'min';
+                    initialVal = u.scales.x.min;
+                } else {
+                    type = 'max';
+                    initialVal = u.scales.x.max;
+                }
+            }
+
+            if (axis) {
+                createAxisInput(e.clientX, e.clientY, initialVal, val => {
+                    let numVal = parseFloat(val);
+                    
+                    // Handle Date String input if Time Mode
+                    if (isTime && isNaN(numVal)) {
+                        const d = new Date(val);
+                        if (!isNaN(d.getTime())) {
+                            numVal = d.getTime() / 1000; // uPlot uses seconds
+                        }
+                    }
+
+                    if (!isNaN(numVal)) {
+                        // Update Internal State
+                        if (axis === 'x') {
+                            axisState.x.auto = false;
+                            // Ensure min/max initialized from current scale if they were null
+                            if (axisState.x.min === null) axisState.x.min = u.scales.x.min;
+                            if (axisState.x.max === null) axisState.x.max = u.scales.x.max;
+                            
+                            if (type === 'min') axisState.x.min = numVal;
+                            else axisState.x.max = numVal;
+                        } else {
+                            axisState.y.auto = false;
+                            if (axisState.y.min === null) axisState.y.min = u.scales.y.min;
+                            if (axisState.y.max === null) axisState.y.max = u.scales.y.max;
+
+                            if (type === 'min') axisState.y.min = numVal;
+                            else axisState.y.max = numVal;
+                        }
+                        rebuildGraph();
+                    }
+                }, isTime);
+            }
+        });
+    }
+
+    function createAxisInput(x, y, value, onCommit, isTime) {
+        const input = document.createElement('input');
+        input.className = 'axis-input';
+        input.style.left = `${x}px`;
+        input.style.top = `${y}px`;
+        
+        // Format value for display
+        if (isTime) {
+             try { input.value = new Date(value * 1000).toISOString(); } 
+             catch(e) { input.value = value; }
+        } else {
+             input.value = value;
+        }
+
+        document.body.appendChild(input);
+        input.focus();
+        input.select();
+
+        const commit = () => {
+            onCommit(input.value);
+            cleanup();
+        };
+
+        const cleanup = () => {
+            if (input.parentNode) input.parentNode.removeChild(input);
+            document.removeEventListener('mousedown', outsideClick);
+        };
+
+        const outsideClick = (e) => {
+            if (e.target !== input) cleanup();
+        };
+
+        input.addEventListener('keydown', e => {
+            if (e.key === 'Enter') commit();
+            if (e.key === 'Escape') cleanup();
+        });
+        
+        input.addEventListener('blur', commit);
+
+        setTimeout(() => document.addEventListener('mousedown', outsideClick), 0);
+    }
+
+
+    function handleFile(file) {
+      if (!FS) {
+        alert("HDF5 library not initialized. This app must be served over HTTP (not file://).");
+        return;
+      }
+
+      currentFile = file;
+      fileInfo.textContent = `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+      treeContainer.innerHTML = '';
+      metadataBody.innerHTML = '<tr><td colspan="2" class="p-2 text-center text-gray-400 italic dark:text-gray-500">Select an item in the tree to view properties</td></tr>';
+      
+      loader.classList.remove('hidden');
+      emptyState.style.display = 'flex';
+      graphContainer.classList.add('flex', 'items-center', 'justify-center');
+
+      if (uplotInstance) {
+        uplotInstance.destroy();
+        uplotInstance = null;
+      }
+      selectedDatasets.clear();
+      plotDataCache = {};
+      
+      // Reset Axis State on new file
+      axisState = { x: { auto: true, min: null, max: null }, y: { auto: true, min: null, max: null } };
+
+      const reader = new FileReader();
+      reader.onload = async function (e) {
+        try {
+          const buffer = e.target.result;
+          const filename = file.name;
+          try { FS.unlink(filename); } catch (_) {}
+          FS.writeFile(filename, new Uint8Array(buffer));
+
+          if (h5File) h5File.close();
+          h5File = new H5File(filename, "r");
+
+          renderTree(h5File, treeContainer);
+          const rootNested = treeContainer.querySelector(':scope > div > .nested');
+          if (rootNested) rootNested.classList.add('active');
+          const rootCaret = treeContainer.querySelector('.caret');
+          if (rootCaret) rootCaret.classList.add('caret-down');
+
+        } catch (err) {
+          console.error(err);
+          alert("Error opening HDF5 file: " + err.message);
+        } finally {
+          loader.classList.add('hidden');
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    // --- Metadata Logic ---
+    function updateMetadata(node) {
+        metadataBody.innerHTML = '';
+        
+        if (!node || !node.attrs) {
+            metadataBody.innerHTML = '<tr><td colspan="2" class="p-2 text-center text-gray-400 italic dark:text-gray-500">No attributes</td></tr>';
+            return;
+        }
+
+        let entries = [];
+        try {
+            // Attempt to iterate over attributes
+            // In h5wasm, node.attrs is a Proxy. We can iterate keys.
+            for (let key in node.attrs) {
+                let val = node.attrs[key];
+                // Handle h5wasm attribute object wrapper if present
+                if (val && typeof val === 'object' && 'value' in val) {
+                    val = val.value;
+                }
+                // Handle TypedArrays for display
+                if (ArrayBuffer.isView(val)) {
+                    val = Array.from(val).join(', ');
+                }
+                entries.push([key, val]);
+            }
+        } catch(e) {
+            console.error("Error reading attributes", e);
+        }
+
+        if (entries.length === 0) {
+            metadataBody.innerHTML = '<tr><td colspan="2" class="p-2 text-center text-gray-400 italic dark:text-gray-500">No attributes found</td></tr>';
+            return;
+        }
+
+        entries.forEach(([key, val]) => {
+            const tr = document.createElement('tr');
+            tr.className = "hover:bg-blue-50 dark:hover:bg-gray-750 transition-colors";
+            
+            let displayVal = val;
+            
+            // Handle BigInt and Nested BigInts safely
+            if (typeof val === 'bigint') {
+                displayVal = val.toString();
+            } else if (typeof val === 'object' && val !== null) {
+                try {
+                    displayVal = JSON.stringify(val, (k, v) => 
+                        typeof v === 'bigint' ? v.toString() : v
+                    );
+                } catch (e) {
+                    displayVal = "[Complex Object]";
+                }
+            }
+            
+            tr.innerHTML = `
+                <td class="p-2 border-b border-gray-100 dark:border-gray-700 font-medium text-gray-700 dark:text-gray-300 truncate max-w-[120px]" title="${key}">${key}</td>
+                <td class="p-2 border-b border-gray-100 dark:border-gray-700 text-gray-600 dark:text-gray-400 font-mono truncate max-w-[120px]" title="${displayVal}">${displayVal}</td>
+            `;
+            metadataBody.appendChild(tr);
+        });
+    }
+
+    // --- Tree Rendering ---
+    function renderTree(group, container, path = '') {
+      const ul = document.createElement('div');
+      ul.className = 'pl-2';
+      const keys = [...group.keys()].sort();
+
+      for (let name of keys) {
+        const child = group.get(name);
+        const fullPath = path ? `${path}/${name}` : name;
+        const li = document.createElement('div');
+        li.className = 'mb-1';
+
+        const isGroup = child instanceof Group;
+        const isDataset = child instanceof Dataset;
+        
+        // Container for the row label
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'flex items-center gap-2 py-1 px-2 rounded cursor-pointer transition-colors border border-transparent hover:border-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-750';
+        
+        // Click handler for selection (Metadata)
+        labelDiv.addEventListener('click', (e) => {
+            // Prevent triggering if clicking specific controls
+            if (e.target.tagName === 'INPUT' || e.target.closest('button')) return;
+            
+            e.stopPropagation();
+            
+            // Highlight logic
+            if (currentlySelectedLabel) currentlySelectedLabel.classList.remove('tree-item-selected');
+            labelDiv.classList.add('tree-item-selected');
+            currentlySelectedLabel = labelDiv;
+            
+            // Update metadata table
+            updateMetadata(child);
+            
+            // If it's a group, also toggle collapse
+            if (isGroup) {
+               const nested = li.querySelector('.nested');
+               const caret = labelDiv.querySelector('.caret');
+               if (nested) nested.classList.toggle('active');
+               if (caret) caret.classList.toggle('caret-down');
+            }
+        });
+
+        if (isGroup) {
+          labelDiv.innerHTML = `<span class="caret"></span> 📁 <span class="font-semibold text-gray-700 dark:text-gray-300 select-none">${name}</span>`;
+          const caret = labelDiv.querySelector('.caret');
+
+          const childrenContainer = document.createElement('div');
+          childrenContainer.className = 'nested ml-4';
+          renderTree(child, childrenContainer, fullPath);
+          li.appendChild(labelDiv);
+          li.appendChild(childrenContainer);
+
+        } else if (isDataset) {
+          const shape = child.shape || [];
+          const is1D = shape.length === 1 && shape[0] > 0;
+          const isCompound = child.dtype && child.dtype.class === 6;
+          const isPlottable = is1D; 
+          const shapeStr = `(${shape.join('x')})`;
+          const checkboxId = `chk-${fullPath.replace(/[^a-zA-Z0-9]/g, '_')}`;
+
+          if (isPlottable) {
+            const icon = isCompound ? '📊' : '📈';
+            const colorClass = isCompound ? 'text-orange-500' : 'text-green-600 dark:text-green-400';
+
+            labelDiv.innerHTML = `
+              <input type="checkbox" id="${checkboxId}" class="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer">
+              <label for="${checkboxId}" class="flex-1 cursor-pointer flex items-center gap-2 truncate select-none">
+                <span class="${colorClass} text-lg">${icon}</span>
+                <span class="truncate font-medium text-gray-700 dark:text-gray-300" title="${name}">${name}</span>
+                <span class="text-xs text-gray-400 dark:text-gray-500 font-normal">${shapeStr}</span>
+              </label>
+              <button title="Inspect Data Table" class="inspect-btn opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded text-gray-500 dark:text-gray-400">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              </button>
+            `;
+
+            const checkbox = labelDiv.querySelector('input');
+            checkbox.addEventListener('change', (e) => {
+              e.stopPropagation();
+              if (e.target.checked) {
+                selectedDatasets.add(fullPath);
+                loadAndPlot(fullPath, child);
+              } else {
+                selectedDatasets.delete(fullPath);
+                rebuildGraph();
+              }
+            });
+
+            // Inspect Button Logic
+            const inspectBtn = labelDiv.querySelector('.inspect-btn');
+            inspectBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              showInspectModal(fullPath, child);
+            });
+            
+            // Add hover class to labelDiv to show inspect btn
+            labelDiv.classList.add('group');
+
+          } else {
+            labelDiv.innerHTML = `
+              <span class="w-4 inline-block"></span>
+              <span class="text-gray-400 dark:text-gray-500 select-none">📄 ${name} <span class="text-xs">${shapeStr}</span></span>
+            `;
+          }
+          li.appendChild(labelDiv);
+        }
+        ul.appendChild(li);
+      }
+      container.appendChild(ul);
+    }
+
+    // --- Modal Logic ---
+    async function showInspectModal(path, dataset) {
+      const name = path.split('/').pop();
+      modalTitle.textContent = `Inspecting: ${name}`;
+      modalMeta.textContent = `Shape: ${JSON.stringify(dataset.shape)} | Type: ${dataset.dtype?.class === 6 ? 'Compound' : 'Numeric/String'}`;
+      
+      // Reset Modal Content
+      modalRawJson.textContent = "Loading...";
+      modalBody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-gray-400">Waiting for data...</td></tr>';
+      
+      modal.classList.remove('hidden');
+
+      // Use setTimeout to allow UI render before heavy parsing
+      setTimeout(() => {
+        try {
+          const rawValue = dataset.value;
+          
+          // 1. Raw Data Preview
+          if (!rawValue || rawValue.length === 0) {
+              modalRawJson.textContent = "Dataset is empty (length 0).";
+              return;
+          }
+
+          const firstRow = rawValue[0];
+          const jsonStr = JSON.stringify(firstRow, (k, v) => typeof v === 'bigint' ? `${v}n` : v, 2);
+          modalRawJson.textContent = jsonStr;
+
+          // 2. Parsing Attempt
+          let isCompound = dataset.dtype && dataset.dtype.class === 6;
+          
+          // Smart check
+          if (!isCompound && (Array.isArray(firstRow) || ArrayBuffer.isView(firstRow) || typeof firstRow === 'object')) {
+             isCompound = true; 
+          }
+
+          let parsed = null;
+
+          if (isCompound) {
+            parsed = tryParseLabviewCompound(rawValue);
+          }
+
+          // 3. Try Numeric (if compound failed or wasn't compound)
+          // Only attempt simple 1D numeric parsing if the row is NOT an array/object
+          // If the row is an array (2D dataset), we prefer the Table View unless LabviewCompound caught it.
+          const isRowComplex = Array.isArray(firstRow) || ArrayBuffer.isView(firstRow) || (typeof firstRow === 'object' && firstRow !== null);
+          
+          if (!parsed && !isRowComplex) {
+             try {
+                // Try to treat as standard numeric array
+                const { y } = normalizeNumericSeries(rawValue);
+                
+                const attrs = dataset.attrs;
+                const getAttr = makeAttrGetter(attrs);
+                
+                let t0 = getAttr('t0') || getAttr('Start Time') || getAttr('WAVEFORM_T0') || 0;
+                let dt = getAttr('dt') || getAttr('Increment') || getAttr('WAVEFORM_DT') || 1;
+                
+                if (t0 > 3000000000) t0 = t0 - LABVIEW_EPOCH_OFFSET;
+                
+                const x = new Float64Array(y.length);
+                for(let i=0; i<y.length; i++) x[i] = t0 + (i * dt);
+                
+                const hasTimeAttrs = (getAttr('t0') !== undefined || getAttr('Start Time') !== undefined || getAttr('WAVEFORM_T0') !== undefined);
+                const midVal = x[Math.floor(x.length / 2)];
+                const isDate = hasTimeAttrs && (midVal > 315360000); 
+                
+                parsed = { x, y, isDate };
+             } catch(e) {
+                 // Numeric parsing failed (likely strings or mixed types), proceed to string fallback
+             }
+          }
+
+          // 4. Render Data
+          if (parsed) {
+              // --- GRAPH SUCCESS PATH ---
+              modalTableHead.innerHTML = '<th class="w-24">Index</th><th>Timestamp (X)</th><th>Value (Y)</th>';
+              
+              const { x, y } = parsed;
+              const limit = Math.min(x.length, 1000); 
+              let html = '';
+              for(let i=0; i<limit; i++) {
+                let tsDisplay = x[i];
+                if (parsed.isDate) {
+                    if(tsDisplay > 315360000) { 
+                        try { tsDisplay = new Date(x[i] * 1000).toISOString(); } catch(e) {}
+                    }
+                }
+                html += `<tr><td>${i}</td><td>${tsDisplay}</td><td>${y[i]}</td></tr>`;
+              }
+              if (x.length > limit) {
+                html += `<tr><td colspan="3" class="text-center italic text-gray-400">... ${x.length - limit} more rows ...</td></tr>`;
+              }
+              modalBody.innerHTML = html;
+          
+          } else {
+              // --- GRAPH FAIL / STRING / TABLE PATH ---
+              // Fallback: Smart Table Logic
+              let headers = ["Index"];
+              let rows = [];
+              const limit = Math.min(rawValue.length, 1000);
+
+              // Detect Column Structure from First Row
+              if (Array.isArray(firstRow) || ArrayBuffer.isView(firstRow)) {
+                  // Array of Arrays -> Columns 0..N
+                  const colCount = firstRow.length;
+                  for(let c=0; c<colCount; c++) headers.push(`Col ${c+1}`);
+                  
+                  for(let i=0; i<limit; i++) {
+                      let rowData = [i];
+                      const row = rawValue[i];
+                      if (row) {
+                          for(let c=0; c<colCount; c++) {
+                              let val = row[c];
+                              if (typeof val === 'object' && val !== null) {
+                                  try { val = JSON.stringify(val); } catch(e) { val = "[Obj]"; }
+                              } else if (typeof val === 'bigint') {
+                                  val = val.toString();
+                              }
+                              rowData.push(String(val));
+                          }
+                      }
+                      rows.push(rowData);
+                  }
+              } else if (typeof firstRow === 'object' && firstRow !== null) {
+                  // Array of Objects -> Keys as headers
+                  const keys = Object.keys(firstRow);
+                  headers.push(...keys);
+                  
+                  for(let i=0; i<limit; i++) {
+                      let rowData = [i];
+                      const row = rawValue[i];
+                      if (row) {
+                          keys.forEach(k => {
+                              let val = row[k];
+                               if (typeof val === 'object' && val !== null) {
+                                  try { val = JSON.stringify(val); } catch(e) { val = "[Obj]"; }
+                              } else if (typeof val === 'bigint') {
+                                  val = val.toString();
+                              }
+                              rowData.push(String(val));
+                          });
+                      }
+                      rows.push(rowData);
+                  }
+              } else {
+                  // Flat Array -> Index, Value
+                  headers.push("Value");
+                  for(let i=0; i<limit; i++) {
+                      let val = rawValue[i];
+                      if (typeof val === 'object' && val !== null) {
+                          try { val = JSON.stringify(val); } catch(e) { val = "[Obj]"; }
+                      } else if (typeof val === 'bigint') {
+                          val = val.toString();
+                      }
+                      rows.push([i, String(val)]);
+                  }
+              }
+
+              // Update DOM
+              modalTableHead.innerHTML = headers.map((h, i) => i===0 ? `<th class="w-24">${h}</th>` : `<th>${h}</th>`).join('');
+              
+              let html = '';
+              rows.forEach(r => {
+                  html += `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`;
+              });
+              
+              if (rawValue.length > limit) {
+                   const colSpan = headers.length;
+                   html += `<tr><td colspan="${colSpan}" class="text-center italic text-gray-400">... ${rawValue.length - limit} more rows ...</td></tr>`;
+              }
+              
+              modalBody.innerHTML = html;
+          }
+
+        } catch (e) {
+          console.error(e);
+          modalRawJson.textContent += `\n\nERROR READING VALUE: ${e.message}`;
+          modalBody.innerHTML = `<tr><td colspan="3" class="text-center py-4 text-red-500">Crash detected: ${e.message}</td></tr>`;
+        }
+      }, 50);
+    }
+
+    // --- Data Processing (Same as Plotting) ---
+
+    function toFiniteNumber(x) {
+      if (x === null || x === undefined) return undefined;
+      if (typeof x === 'number') return Number.isFinite(x) ? x : undefined;
+      if (typeof x === 'boolean') return x ? 1 : 0;
+      if (typeof x === 'bigint') return Number(x);
+      if (typeof x === 'string') {
+        const n = Number.parseFloat(x);
+        return Number.isFinite(n) ? n : undefined;
+      }
+      if (typeof x === 'object') {
+        if ('value' in x) return toFiniteNumber(x.value);
+      }
+      return undefined;
+    }
+
+    function tryParseLabviewCompound(rawValue) {
+      if (!rawValue || rawValue.length === 0) return null;
+
+      const firstRow = rawValue[0];
+      const isArrayLike = Array.isArray(firstRow) || ArrayBuffer.isView(firstRow);
+
+      if (isArrayLike) {
+          let valIdx = -1;
+          let tsIdx = -1;
+          
+          for (let idx = 0; idx < firstRow.length; idx++) {
+              const item = firstRow[idx];
+              if (typeof item === 'number' || typeof item === 'boolean') {
+                  valIdx = idx;
+              }
+              else if (
+                  (Array.isArray(item) && item.length >= 2) || 
+                  (ArrayBuffer.isView(item) && item.length >= 2)
+              ) {
+                  tsIdx = idx;
+              }
+              else if (typeof item === 'object' && item !== null && (item[0] !== undefined || item.seconds !== undefined)) {
+                  tsIdx = idx;
+              }
+          }
+
+          if (valIdx !== -1 && tsIdx !== -1) {
+             const yData = new Float64Array(rawValue.length);
+             const xData = new Float64Array(rawValue.length);
+             let validCount = 0;
+
+             for (let i = 0; i < rawValue.length; i++) {
+                const row = rawValue[i];
+                if (!row) continue;
+                
+                const val = toFiniteNumber(row[valIdx]);
+                const tsObj = row[tsIdx];
+                if (val === undefined || !tsObj) continue;
+
+                let s, f;
+                if ((Array.isArray(tsObj) || ArrayBuffer.isView(tsObj)) && tsObj.length >= 2) {
+                   s = Number(tsObj[0]);
+                   f = Number(tsObj[1]);
+                } else if (typeof tsObj === 'object') {
+                   const vals = Object.values(tsObj);
+                   if (vals.length >= 2) { s = Number(vals[0]); f = Number(vals[1]); }
+                }
+
+                if (s === undefined) continue;
+                if (s > 3000000000) s = s - LABVIEW_EPOCH_OFFSET;
+                let fracSec = 0;
+                if (f > 0) fracSec = f * 5.421010862427522e-20; 
+
+                yData[validCount] = val;
+                xData[validCount] = s + fracSec;
+                validCount++;
+             }
+             
+             if (validCount === 0) return null;
+             const midVal = xData[Math.floor(validCount / 2)];
+             const isDate = midVal > 315360000;
+             return { x: xData.subarray(0, validCount), y: yData.subarray(0, validCount), isDate: isDate };
+          }
+      }
+
+      if (typeof firstRow !== 'object' || firstRow === null) return null;
+      const keys = Object.keys(firstRow);
+      
+      let tsKey = keys.find(k => /timestamp|time|stamp|clock/i.test(k));
+      let valKey = keys.find(k => /value|amplitude|data|signal|voltage|current/i.test(k));
+      
+      if (!valKey && tsKey) valKey = keys.find(k => k !== tsKey);
+      if (!tsKey && valKey) tsKey = keys.find(k => k !== valKey);
+
+      if (!valKey || !tsKey) return null;
+
+      const yData = new Float64Array(rawValue.length);
+      const xData = new Float64Array(rawValue.length);
+      let validCount = 0;
+
+      for (let i = 0; i < rawValue.length; i++) {
+        const row = rawValue[i];
+        const val = toFiniteNumber(row[valKey]);
+        const tsObj = row[tsKey];
+
+        if (val === undefined || !tsObj) continue;
+
+        let seconds, fractions;
+        if (typeof tsObj === 'object' && !Array.isArray(tsObj)) {
+            const tsKeys = Object.keys(tsObj);
+            const sKey = tsKeys.find(k => /sec/i.test(k)) || tsKeys[0];
+            const fKey = tsKeys.find(k => /frac/i.test(k)) || tsKeys[1];
+            seconds = tsObj[sKey];
+            fractions = tsObj[fKey];
+        } else if (Array.isArray(tsObj) && tsObj.length >= 2) {
+            seconds = tsObj[0];
+            fractions = tsObj[1];
+        }
+
+        let s = Number(seconds);
+        let f = Number(fractions);
+
+        if (s > 3000000000) s = s - LABVIEW_EPOCH_OFFSET;
+
+        let fracSec = 0;
+        if (f > 0) fracSec = f * 5.421010862427522e-20; 
+
+        yData[validCount] = val;
+        xData[validCount] = s + fracSec; 
+        validCount++;
+      }
+
+      if (validCount === 0) return null;
+      const midVal = xData[Math.floor(validCount / 2)];
+      const isDate = midVal > 315360000;
+
+      return { x: xData.subarray(0, validCount), y: yData.subarray(0, validCount), isDate: isDate };
+    }
+
+    function normalizeNumericSeries(rawValue) {
+      if (rawValue === null || rawValue === undefined) throw new Error('Empty');
+      let arr;
+      if (ArrayBuffer.isView(rawValue) || Array.isArray(rawValue)) {
+        arr = Float64Array.from(Array.from(rawValue, toFiniteNumber).filter(v => v !== undefined));
+      } else {
+        const n = toFiniteNumber(rawValue);
+        if (n !== undefined) arr = Float64Array.of(n);
+        else throw new Error(`Unsupported: ${typeof rawValue}`);
+      }
+      return { y: arr };
+    }
+
+    // --- ROBUST ATTRIBUTE EXTRACTION ---
+    function extractAttributeNumeric(val) {
+        if (val === undefined || val === null) return undefined;
+        // Handle h5wasm { value: ... } wrapper if it exists
+        if (typeof val === 'object' && val !== null && 'value' in val && Object.keys(val).length === 1) {
+            val = val.value;
+        }
+
+        if (typeof val === 'number') return Number.isFinite(val) ? val : undefined;
+        if (typeof val === 'bigint') return Number(val);
+        
+        // Arrays (take first element, e.g. [sec, frac] -> sec)
+        if (Array.isArray(val) || ArrayBuffer.isView(val)) {
+            return val.length > 0 ? extractAttributeNumeric(val[0]) : undefined;
+        }
+
+        // Objects (look for sec/seconds/t0)
+        if (typeof val === 'object') {
+            if ('sec' in val) return Number(val.sec);
+            if ('seconds' in val) return Number(val.seconds);
+            if ('Cluster' in val) return extractAttributeNumeric(val.Cluster);
+            if ('t0' in val) return Number(val.t0);
+            
+            // Heuristic
+            const vals = Object.values(val);
+            if (vals.length > 0) {
+                 const first = vals[0];
+                 if (typeof first === 'number' || typeof first === 'bigint') return Number(first);
+            }
+        }
+        return undefined;
+    }
+
+    function makeAttrGetter(attrs) {
+      return (key) => {
+        if (!attrs) return undefined;
+        let val;
+        try {
+             if (key in attrs) val = attrs[key];
+             else if (typeof attrs.get === 'function') val = attrs.get(key);
+        } catch(e) {}
+        
+        if (val && typeof val === 'object' && 'value' in val && !('sec' in val)) val = val.value;
+        return extractAttributeNumeric(val);
+      };
+    }
+
+    // --- Decimation Logic ---
+    function downsampleSeries(x, y, resolution) {
+        const len = y.length;
+        if (len <= resolution) return { x, y };
+
+        // We target roughly 'resolution' points.
+        // Each bucket produces up to 2 points (min and max).
+        // So we want resolution/2 buckets.
+        const bucketSize = Math.floor(len / (resolution / 2));
+        if (bucketSize < 2) return { x, y };
+
+        // Pre-allocate result arrays. Max points = (buckets * 2) + 2 (start/end safety)
+        const capacity = Math.ceil(len / bucketSize) * 2 + 2;
+        const sampledX = new Float64Array(capacity);
+        const sampledY = new Float64Array(capacity);
+        
+        let writePtr = 0;
+
+        // Iterate over buckets
+        for (let i = 0; i < len; i += bucketSize) {
+            let end = i + bucketSize;
+            if (end > len) end = len;
+
+            let minVal = y[i];
+            let maxVal = y[i];
+            let minIdx = i;
+            let maxIdx = i;
+
+            // Find min/max in current bucket
+            for (let j = i + 1; j < end; j++) {
+                const v = y[j];
+                if (v < minVal) { minVal = v; minIdx = j; }
+                if (v > maxVal) { maxVal = v; maxIdx = j; }
+            }
+
+            // Push the two points in temporal order
+            if (minIdx === maxIdx) {
+                // Just one point if flat
+                sampledX[writePtr] = x[minIdx];
+                sampledY[writePtr] = minVal;
+                writePtr++;
+            } else if (minIdx < maxIdx) {
+                sampledX[writePtr] = x[minIdx];
+                sampledY[writePtr] = minVal;
+                writePtr++;
+                
+                sampledX[writePtr] = x[maxIdx];
+                sampledY[writePtr] = maxVal;
+                writePtr++;
+            } else {
+                sampledX[writePtr] = x[maxIdx];
+                sampledY[writePtr] = maxVal;
+                writePtr++;
+                
+                sampledX[writePtr] = x[minIdx];
+                sampledY[writePtr] = minVal;
+                writePtr++;
+            }
+        }
+
+        // Return the slice used
+        return { 
+            x: sampledX.subarray(0, writePtr), 
+            y: sampledY.subarray(0, writePtr) 
+        };
+    }
+
+    // --- Graphing Logic ---
+
+    async function loadAndPlot(path, dataset) {
+      emptyState.style.display = 'none';
+      if (!plotDataCache[path]) {
+        try {
+          const rawValue = dataset.value;
+          
+          // 1. Determine if strict Compound parsing is needed
+          let isCompound = dataset.dtype && dataset.dtype.class === 6;
+          
+          // Heuristic: If it looks like an array/object but isn't flagged as compound, treat as potential compound
+          if (!isCompound && rawValue && rawValue.length > 0) {
+             const row = rawValue[0];
+             if (Array.isArray(row) || ArrayBuffer.isView(row) || (typeof row === 'object' && row !== null)) {
+                 isCompound = true;
+             }
+          }
+
+          let parsed = null;
+          
+          // 2. Try Compound Parsing
+          if (isCompound) {
+            parsed = tryParseLabviewCompound(rawValue);
+          } 
+          
+          // 3. Fallback: Standard Numeric Series
+          if (!parsed) {
+             try {
+                // If compound failed or wasn't attempted, try linear
+                const { y } = normalizeNumericSeries(rawValue);
+                
+                const attrs = dataset.attrs;
+                const getAttr = makeAttrGetter(attrs);
+                
+                let t0 = getAttr('t0') || getAttr('Start Time') || getAttr('WAVEFORM_T0') || 0;
+                let dt = getAttr('dt') || getAttr('Increment') || getAttr('WAVEFORM_DT') || 1;
+                
+                if (t0 > 3000000000) t0 = t0 - LABVIEW_EPOCH_OFFSET;
+                
+                const x = new Float64Array(y.length);
+                for(let i=0; i<y.length; i++) x[i] = t0 + (i * dt);
+                
+                const hasTimeAttrs = (getAttr('t0') !== undefined || getAttr('Start Time') !== undefined || getAttr('WAVEFORM_T0') !== undefined);
+                const midVal = x[Math.floor(x.length / 2)];
+                const isDate = hasTimeAttrs && (midVal > 315360000); 
+                
+                parsed = { x, y, isDate };
+             } catch(err) {
+                 // Final failure
+                 throw new Error("Unable to parse data as graph.");
+             }
+          }
+          
+          plotDataCache[path] = parsed;
+
+        } catch (e) {
+          console.error(e);
+          selectedDatasets.delete(path);
+          
+          const safeId = path.replace(/[^a-zA-Z0-9]/g, '_');
+          const chk = document.getElementById(`chk-${safeId}`);
+          if (chk) chk.checked = false;
+          
+          const name = path.split('/').pop();
+          showToast(`Cannot display "${name}"`);
+          
+          rebuildGraph();
+          return;
+        }
+      }
+      rebuildGraph();
+    }
+
+    function rebuildGraph() {
+      if (selectedDatasets.size === 0) {
+        if (uplotInstance) {
+          uplotInstance.destroy();
+          uplotInstance = null;
+        }
+        graphContainer.classList.add('flex', 'items-center', 'justify-center');
+        emptyState.style.display = 'flex';
+        return;
+      }
+      
+      emptyState.style.display = 'none';
+      graphContainer.classList.remove('flex', 'items-center', 'justify-center');
+
+      const activePaths = Array.from(selectedDatasets);
+      const rect = graphContainer.getBoundingClientRect();
+      const safeWidth = rect.width || 800;
+      const safeHeight = rect.height || 400;
+      const targetResolution = Math.max(2000, safeWidth * 2);
+
+      // Apply Decimation
+      const activeData = activePaths.map(p => {
+          const raw = plotDataCache[p];
+          if (!raw) return null;
+          const { x, y } = downsampleSeries(raw.x, raw.y, targetResolution);
+          return { x, y, isDate: raw.isDate }; 
+      }).filter(d => d !== null);
+
+      const isTimeMode = activeData.some(d => d.isDate);
+
+      let finalX, seriesArrays;
+      
+      if (activeData.length === 1) {
+        finalX = activeData[0].x;
+        seriesArrays = [activeData[0].y];
+      } else {
+        const xSet = new Set();
+        activeData.forEach(d => { for(let v of d.x) xSet.add(v); });
+        finalX = Float64Array.from(xSet).sort();
+        seriesArrays = activeData.map(d => {
+            const mappedY = new Array(finalX.length).fill(null);
+            let ptr = 0; 
+            for (let i = 0; i < finalX.length; i++) {
+                const target = finalX[i];
+                while(ptr < d.x.length && d.x[ptr] < target) ptr++;
+                if (ptr < d.x.length && Math.abs(d.x[ptr] - target) < 1e-9) mappedY[i] = d.y[ptr];
+            }
+            return mappedY;
+        });
+      }
+      
+      if (finalX.length < 2) {
+          const newX = new Float64Array(2);
+          newX[0] = finalX[0] || 0;
+          newX[1] = (finalX[0] || 0) + 1; 
+          finalX = newX;
+          seriesArrays = seriesArrays.map(s => { const n = new Array(2).fill(null); n[0] = s[0]; return n; });
+      }
+
+      const series = [ {}, ...activePaths.map((p, i) => ({ label: p.split('/').pop(), stroke: COLORS[i % COLORS.length], width: 2, spanGaps: true })) ];
+      const data = [ Array.from(finalX), ...seriesArrays ];
+
+      // Theme Colors
+      const themeColors = isDarkMode ? {
+         text: "#e5e7eb",
+         grid: "#374151" 
+      } : {
+         text: "#000000",
+         grid: "#e5e7eb"
+      };
+
+      const opts = {
+        title: "Data Viewer",
+        width: safeWidth,
+        height: safeHeight,
+        series: series,
+        scales: { 
+            x: { time: isTimeMode, auto: axisState.x.auto }, 
+            y: { auto: axisState.y.auto } 
+        },
+        axes: [ 
+            { 
+                label: isTimeMode ? "Time" : "Index", 
+                grid: { show: true, stroke: themeColors.grid }, 
+                stroke: themeColors.text,
+                labelFont: "12px Inter",
+                font: "12px Inter"
+            }, 
+            { 
+                label: "Value", 
+                grid: { show: true, stroke: themeColors.grid }, 
+                stroke: themeColors.text,
+                labelFont: "12px Inter",
+                font: "12px Inter"
+            } 
+        ],
+        cursor: { drag: { x: true, y: true, uni: 50 } },
+        legend: { show: true },
+        hooks: {
+            init: [initAxisInteractions],
+            setScale: [(u) => {
+                // Keep internal state in sync if zooming changes things (optional but good for consistency)
+            }]
+        }
+      };
+      
+      // Manual Axis override
+      if (!axisState.x.auto && axisState.x.min !== null && axisState.x.max !== null) {
+          opts.scales.x.min = axisState.x.min;
+          opts.scales.x.max = axisState.x.max;
+      }
+      if (!axisState.y.auto && axisState.y.min !== null && axisState.y.max !== null) {
+          opts.scales.y.min = axisState.y.min;
+          opts.scales.y.max = axisState.y.max;
+      }
+
+      if (uplotInstance) uplotInstance.destroy();
+      uplotInstance = new uPlot(opts, data, document.getElementById('graph-container'));
+    }
+  </script>
+</body>
+</html>
