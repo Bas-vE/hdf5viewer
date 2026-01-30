@@ -296,6 +296,11 @@
 
   </main>
 
+  <!-- Footer -->
+  <footer class="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-1 text-center text-[10px] text-gray-400 dark:text-gray-500 shrink-0 z-10">
+    Made by Bas v. Etten
+  </footer>
+
   <script type="module">
     import h5wasm from "https://cdn.jsdelivr.net/npm/h5wasm@0.8.11/dist/esm/hdf5_hl.js";
 
@@ -739,6 +744,94 @@
         });
     }
 
+    // --- Type Checking for Graphability ---
+    function isGraphableType(dtype) {
+        if (!dtype) return true; // Default to TRUE (Allow) if unknown, let parser fail if needed
+        
+        // EXCLUSIONARY Logic (Block known bad types):
+        if (dtype.class === 3) return false; // String
+        if (dtype.class === 5) return false; // Opaque
+        if (dtype.class === 7) return false; // Reference
+        if (dtype.class === 9) return false; // VLEN (Usually strings)
+        
+        // 6 = Compound: check members
+        if (dtype.class === 6 && dtype.members) {
+            let hasGraphableMember = false;
+            for (let mName in dtype.members) {
+                const mType = dtype.members[mName];
+                if (isGraphableType(mType)) {
+                    hasGraphableMember = true;
+                    break;
+                }
+            }
+            return hasGraphableMember;
+        }
+
+        // 10 = Array: check base type
+        if (dtype.class === 10) {
+             if (dtype.base) return isGraphableType(dtype.base);
+        }
+        
+        return true;
+    }
+
+    // --- Content Checking (Peek) ---
+    function checkDatasetContent(dataset) {
+        try {
+            if (!dataset.shape || dataset.shape.length === 0) {
+                // Scalar: read value directly
+                return recursiveCheckForNumber(dataset.value);
+            }
+            
+            // Construct slice for first element
+            // This is efficient: we only read 1 element from WASM heap
+            const ranges = dataset.shape.map(() => [0, 1]);
+            const sliceVal = dataset.slice(ranges);
+            
+            return recursiveCheckForNumber(sliceVal);
+            
+        } catch (e) {
+            console.warn("Peek failed for", dataset.name, e);
+            // If peek fails, default to showing checkbox to be safe
+            return true; 
+        }
+    }
+
+    function recursiveCheckForNumber(val) {
+        if (val === null || val === undefined) return false;
+        
+        // Single value check
+        if (typeof val === 'number') return Number.isFinite(val);
+        if (typeof val === 'bigint') return true;
+        
+        // Array/View check (Iterate down to find value)
+        if (Array.isArray(val) || ArrayBuffer.isView(val)) {
+            if (val.length === 0) return false;
+            return recursiveCheckForNumber(val[0]);
+        }
+        
+        // String check (STRICT: Must be parsed as number AND not look like a date/sentence)
+        if (typeof val === 'string') {
+             if (val.trim() === '') return false;
+             const n = Number(val);
+             // "2022-10..." parses to NaN in strict Number(). parseFloat would allow it.
+             return Number.isFinite(n);
+        }
+        
+        // Object check (Compound)
+        if (typeof val === 'object') {
+            // h5wasm value wrapper
+            if ('value' in val && Object.keys(val).length === 1) return recursiveCheckForNumber(val.value);
+            
+            // Compound type: if ANY field is numeric, we call it graphable
+            for (const k in val) {
+                if (recursiveCheckForNumber(val[k])) return true;
+            }
+        }
+        
+        return false;
+    }
+
     // --- Tree Rendering ---
     function renderTree(group, container, path = '') {
       const ul = document.createElement('div');
@@ -754,26 +847,17 @@
         const isGroup = child instanceof Group;
         const isDataset = child instanceof Dataset;
         
-        // Container for the row label
         const labelDiv = document.createElement('div');
         labelDiv.className = 'flex items-center gap-2 py-1 px-2 rounded cursor-pointer transition-colors border border-transparent hover:border-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-750';
         
-        // Click handler for selection (Metadata)
+        // Metadata Selection
         labelDiv.addEventListener('click', (e) => {
-            // Prevent triggering if clicking specific controls
             if (e.target.tagName === 'INPUT' || e.target.closest('button')) return;
-            
             e.stopPropagation();
-            
-            // Highlight logic
             if (currentlySelectedLabel) currentlySelectedLabel.classList.remove('tree-item-selected');
             labelDiv.classList.add('tree-item-selected');
             currentlySelectedLabel = labelDiv;
-            
-            // Update metadata table
             updateMetadata(child);
-            
-            // If it's a group, also toggle collapse
             if (isGroup) {
                const nested = li.querySelector('.nested');
                const caret = labelDiv.querySelector('.caret');
@@ -784,8 +868,6 @@
 
         if (isGroup) {
           labelDiv.innerHTML = `<span class="caret"></span> 📁 <span class="font-semibold text-gray-700 dark:text-gray-300 select-none">${name}</span>`;
-          const caret = labelDiv.querySelector('.caret');
-
           const childrenContainer = document.createElement('div');
           childrenContainer.className = 'nested ml-4';
           renderTree(child, childrenContainer, fullPath);
@@ -794,9 +876,20 @@
 
         } else if (isDataset) {
           const shape = child.shape || [];
-          const is1D = shape.length === 1 && shape[0] > 0;
+          
+          const is1D = (shape.length === 1 && shape[0] > 0) || 
+                       (shape.length === 2 && (shape[0] > 0 && shape[1] > 0) && (shape[0] === 1 || shape[1] === 1));
+                       
           const isCompound = child.dtype && child.dtype.class === 6;
-          const isPlottable = is1D; 
+          
+          // 1. FAST CHECK: Dtype
+          let isPlottable = is1D && isGraphableType(child.dtype);
+
+          // 2. SLOW CHECK: Content Peek (Only if passes fast check)
+          if (isPlottable) {
+              isPlottable = checkDatasetContent(child);
+          }
+          
           const shapeStr = `(${shape.join('x')})`;
           const checkboxId = `chk-${fullPath.replace(/[^a-zA-Z0-9]/g, '_')}`;
 
@@ -817,7 +910,6 @@
                 </svg>
               </button>
             `;
-
             const checkbox = labelDiv.querySelector('input');
             checkbox.addEventListener('change', (e) => {
               e.stopPropagation();
@@ -829,22 +921,34 @@
                 rebuildGraph();
               }
             });
-
-            // Inspect Button Logic
             const inspectBtn = labelDiv.querySelector('.inspect-btn');
             inspectBtn.addEventListener('click', (e) => {
               e.stopPropagation();
               showInspectModal(fullPath, child);
             });
-            
-            // Add hover class to labelDiv to show inspect btn
             labelDiv.classList.add('group');
 
           } else {
+            // Non-Plottable
             labelDiv.innerHTML = `
               <span class="w-4 inline-block"></span>
-              <span class="text-gray-400 dark:text-gray-500 select-none">📄 ${name} <span class="text-xs">${shapeStr}</span></span>
+              <div class="flex-1 flex items-center gap-2 truncate select-none">
+                  <span class="text-gray-400 dark:text-gray-500 text-lg">📄</span>
+                  <span class="truncate text-gray-500 dark:text-gray-400" title="${name}">${name}</span>
+                  <span class="text-xs text-gray-400 dark:text-gray-600 font-mono">${shapeStr}</span>
+              </div>
+              <button title="Inspect Data Table" class="inspect-btn opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded text-gray-500 dark:text-gray-400">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              </button>
             `;
+            const inspectBtn = labelDiv.querySelector('.inspect-btn');
+            inspectBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              showInspectModal(fullPath, child);
+            });
+            labelDiv.classList.add('group');
           }
           li.appendChild(labelDiv);
         }
@@ -1039,13 +1143,26 @@
 
     function toFiniteNumber(x) {
       if (x === null || x === undefined) return undefined;
+      
+      // Unwrap single-element arrays (e.g., column vectors [12.34])
+      if (Array.isArray(x) || ArrayBuffer.isView(x)) {
+          if (x.length === 1) return toFiniteNumber(x[0]);
+          return undefined; // Can't reduce multi-element array to single number
+      }
+      
       if (typeof x === 'number') return Number.isFinite(x) ? x : undefined;
       if (typeof x === 'boolean') return x ? 1 : 0;
       if (typeof x === 'bigint') return Number(x);
+      
       if (typeof x === 'string') {
-        const n = Number.parseFloat(x);
+        // STRICT PARSING:
+        // parseFloat allows "2022-10" -> 2022.
+        // Number() returns NaN for "2022-10". 
+        if (x.trim() === '') return undefined;
+        const n = Number(x);
         return Number.isFinite(n) ? n : undefined;
       }
+      
       if (typeof x === 'object') {
         if ('value' in x) return toFiniteNumber(x.value);
       }
@@ -1350,6 +1467,11 @@
                  // Final failure
                  throw new Error("Unable to parse data as graph.");
              }
+          }
+          
+          // 4. Final Validation: Ensure we actually have data points
+          if (parsed && parsed.x.length === 0) {
+              throw new Error("Parsed data contained no valid numeric points.");
           }
           
           plotDataCache[path] = parsed;
