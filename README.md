@@ -2,6 +2,8 @@
 
 A professional, browser-based inspection tool for **HDF5 (.h5)** files. This utility allows users to explore file hierarchies, view metadata (attributes), and visualize complex datasets instantly without any server-side processing.
 
+try it out at my [test page](http://www.basvanetten.nl/hdf5)
+
 ## Key Features
 * **Privacy First:** Files are processed locally via WebAssembly. Your data never leaves your computer.
 * **High Performance:** Uses `uPlot` and custom decimation logic to render datasets with millions of points smoothly.
